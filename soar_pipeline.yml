@@ -1,0 +1,82 @@
+#This template defines the entire SOAR pipeline as code. It creates the EventBridge rule, the SNS topic, the Lambda function, and all the necessary IAM permissions.
+
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Deploys a serverless SOAR pipeline for GuardDuty findings.'
+
+Parameters:
+  AlertEmailAddress:
+    Type: String
+    Description: 'The email address for SNS security alerts.'
+
+Resources:
+  # SNS Topic for Alerts
+  AlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref AlertEmailAddress
+          Protocol: email
+
+  # Lambda Function for Remediation
+  RemediationLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: 'remediate_ec2.lambda_handler'
+      Runtime: 'python3.9'
+      Role: !GetAtt RemediationLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          ec2 = boto3.client('ec2')
+          def lambda_handler(event, context):
+              try:
+                  instance_id = event['detail']['resource']['instanceDetails']['instanceId']
+                  print(f"Stopping instance: {instance_id}")
+                  ec2.stop_instances(InstanceIds=[instance_id])
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+
+  # IAM Role for the Lambda Function
+  RemediationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: 'lambda.amazonaws.com' }
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: 'EC2StopPolicy'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: 'ec2:StopInstances'
+                Resource: '*' # For production, restrict this to specific instances
+
+  # EventBridge Rule to catch GuardDuty findings
+  GuardDutyEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Routes GuardDuty findings to SNS and Lambda.'
+      EventPattern:
+        source:
+          - 'aws.guardduty'
+      Targets:
+        - Arn: !Ref AlertSNSTopic
+          Id: 'SNSTarget'
+        - Arn: !GetAtt RemediationLambdaFunction.Arn
+          Id: 'LambdaTarget'
+  
+  # Permission for EventBridge to invoke the Lambda function
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RemediationLambdaFunction
+      Action: 'lambda:InvokeFunction'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt GuardDutyEventRule.Arn
