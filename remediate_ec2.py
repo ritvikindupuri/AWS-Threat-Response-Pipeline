@@ -1,4 +1,4 @@
-This Python code is for the Lambda function that performs the auto-remediation. It parses the GuardDuty finding from the EventBridge event, extracts the compromised instance ID, and stops the instance.
+#This Python code is for the Lambda function that performs the auto-remediation. It parses the GuardDuty finding from the EventBridge event, extracts the compromised instance ID, and stops the instance.
 
 import boto3
 import json
